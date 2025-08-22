@@ -1,30 +1,134 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="pt-BR">
 <head>
-  <meta charset="UTF-8">
-  <title>Modelo 3D em AR</title>
-  <script type="module" src="https://unpkg.com/@google/model-viewer/dist/model-viewer.min.js"></script>
-  <style>
-    body { margin: 0; }
-    model-viewer { width: 100%; height: 100vh; }
-    /* Força o botão AR visível mesmo em dispositivos compatíveis */
-    .ar-button { position: absolute; bottom: 16px; left: 50%; transform: translateX(-50%); z-index: 1; }
-  </style>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>AR com WebXR - pseudocosmos</title>
+  <style> body{margin:0;overflow:hidden;font-family:sans-serif} #fallback{position:fixed;left:10px;top:10px;z-index:10;background:#fff;padding:8px;border-radius:6px;box-shadow:0 2px 10px rgba(0,0,0,.2)} </style>
 </head>
 <body>
-  <model-viewer
-    src="aha.glb"
-    alt="Modelo animado"
-    ar
-    ar-modes="scene-viewer webxr quick-look"
-    ar-scale="auto"
-    ar-placement="floor"
-    camera-controls
-    auto-rotate
-    autoplay
-    exposure="1"
-    shadow-intensity="1"
-    background-color="#ffffff">
-  </model-viewer>
+  <div id="fallback" style="display:none;">
+    WebXR não disponível. <a id="modelviewerLink" href="#">Abrir fallback (model-viewer)</a>
+  </div>
+
+  <script type="module">
+    import * as THREE from 'https://unpkg.com/three@0.154.0/build/three.module.js';
+    import { GLTFLoader } from 'https://unpkg.com/three@0.154.0/examples/jsm/loaders/GLTFLoader.js';
+    import { ARButton } from 'https://unpkg.com/three@0.154.0/examples/jsm/webxr/ARButton.js';
+
+    let camera, scene, renderer;
+    let controller;
+    let reticle; // an indicator on the floor
+    let modelGLB = null;
+    const MODEL_URL = 'aha.glb'; // seu arquivo no repo
+
+    init();
+    async function init(){
+      // Checar WebXR suport
+      if (navigator.xr === undefined) {
+        showFallback();
+        return;
+      }
+      // THREE renderer
+      renderer = new THREE.WebGLRenderer({ antialias:true, alpha:true });
+      renderer.setPixelRatio(window.devicePixelRatio);
+      renderer.setSize(window.innerWidth, window.innerHeight);
+      renderer.xr.enabled = true;
+      document.body.appendChild(renderer.domElement);
+
+      scene = new THREE.Scene();
+      camera = new THREE.PerspectiveCamera(70, window.innerWidth/window.innerHeight, 0.01, 20);
+
+      // luz básica
+      const light = new THREE.HemisphereLight(0xffffff, 0xbbbbff, 1);
+      scene.add(light);
+
+      // Reticle (pequeno anel que mostra onde vamos colocar)
+      const ring = new THREE.RingGeometry(0.07, 0.09, 32).rotateX(-Math.PI/2);
+      const ringMat = new THREE.MeshBasicMaterial({color:0x00ffcc});
+      reticle = new THREE.Mesh(ring, ringMat);
+      reticle.matrixAutoUpdate = false;
+      reticle.visible = false;
+      scene.add(reticle);
+
+      // Carregar modelo (mas não adicionar ainda)
+      const loader = new GLTFLoader();
+      loader.load(MODEL_URL, (gltf)=>{
+        modelGLB = gltf.scene;
+        // Opcional: ajustar escala inicial
+        modelGLB.scale.set(0.5,0.5,0.5);
+      }, undefined, (err)=>console.error('Erro carregando GLB', err));
+
+      // botão AR
+      document.body.appendChild(ARButton.createButton(renderer, { requiredFeatures: ['hit-test'] }));
+
+      // controller para eventos de input (select) - tocar para colocar
+      controller = renderer.xr.getController(0);
+      controller.addEventListener('select', onSelect);
+      scene.add(controller);
+
+      // Start render loop
+      renderer.setAnimationLoop(render);
+      window.addEventListener('resize', onWindowResize);
+    }
+
+    // Evento de colocar o modelo: clona modelGLB e coloca na posição do reticle
+    function onSelect(){
+      if (!modelGLB) return;
+      if (!reticle.visible) return;
+      const clone = modelGLB.clone(true);
+      clone.position.setFromMatrixPosition(reticle.matrix);
+      clone.quaternion.setFromRotationMatrix(reticle.matrix);
+      scene.add(clone);
+    }
+
+    // Hit test: atualiza o reticle
+    const tempMatrix = new THREE.Matrix4();
+    async function render(timestamp, frame){
+      if (frame){
+        const session = renderer.xr.getSession();
+        const referenceSpace = renderer.xr.getReferenceSpace();
+
+        // request a hit test source once and store on session
+        if (!session._hitTestSourceRequested){
+          session._hitTestSourceRequested = true;
+          const viewerSpace = await session.requestReferenceSpace('viewer');
+          session._hitTestSource = await session.requestHitTestSource({ space: viewerSpace });
+        }
+
+        const hitTestSource = session._hitTestSource;
+        if (hitTestSource){
+          const hitTestResults = frame.getHitTestResults(hitTestSource);
+          if (hitTestResults.length > 0){
+            const hit = hitTestResults[0];
+            const pose = hit.getPose(referenceSpace);
+            // colocar reticle
+            tempMatrix.fromArray(pose.transform.matrix);
+            reticle.matrix.copy(tempMatrix);
+            reticle.visible = true;
+          } else {
+            reticle.visible = false;
+          }
+        }
+      }
+
+      renderer.render(scene, camera);
+    }
+
+    function onWindowResize(){
+      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+    }
+
+    // fallback: abrir model-viewer com ios-src (quick look)
+    function showFallback(){
+      const fb = document.getElementById('fallback');
+      fb.style.display = 'block';
+      const link = document.getElementById('modelviewerLink');
+      // se você tiver um arquivo .usdz, coloque ios-src link
+      link.href = 'https://kenaihugs432-pixel.github.io/pseudocosmos/index_modelviewer.html';
+    }
+  </script>
 </body>
 </html>
