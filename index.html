@@ -26,125 +26,178 @@
   <div id="message">Iniciando AR… (se ficar em branco, abra o console do navegador)</div>
   <div id="errorBox"></div>
 
-  <script type="module">
-  (async function(){
-    const showError = (txt) => {
-      const box = document.getElementById('errorBox');
-      box.style.display = 'block';
-      box.textContent += txt + "\n\n";
-      console.error(txt);
-    };
+<script type="module">
+(async () => {
+  const showError = (txt) => {
+    const box = document.getElementById('errorBox');
+    box.style.display = 'block';
+    box.textContent += txt + "\n\n";
+    console.error(txt);
+  };
 
-    // Verifica se aha.glb existe
-    try {
-      const resp = await fetch('aha.glb', {method:'HEAD'});
-      if(!resp.ok){
-        showError('Erro: não encontrei "aha.glb" na raiz do site. Verifique o nome (case-sensitive). HTTP ' + resp.status);
-        document.getElementById('message').innerHTML = 'Arquivo GLB não encontrado. Abra <a href="index_modelviewer.html">fallback model-viewer</a>.';
-        return;
+  // verifica GLB
+  try {
+    const resp = await fetch('aha.glb', { method: 'HEAD' });
+    if (!resp.ok) {
+      showError('Arquivo aha.glb não encontrado (HTTP ' + resp.status + '). Verifique o upload/nome (case-sensitive).');
+      return;
+    }
+  } catch (e) {
+    showError('Erro ao checar aha.glb: ' + e);
+    return;
+  }
+
+  // importar módulos (import map resolve 'three')
+  let THREE, GLTFLoaderModule, ARButtonModule;
+  try {
+    THREE = await import('three');
+    GLTFLoaderModule = await import('https://cdn.jsdelivr.net/npm/three@0.154.0/examples/jsm/loaders/GLTFLoader.js');
+    ARButtonModule = await import('https://cdn.jsdelivr.net/npm/three@0.154.0/examples/jsm/webxr/ARButton.js');
+  } catch (err) {
+    showError('Falha ao carregar Three.js via CDN/importmap: ' + err);
+    return;
+  }
+  const { GLTFLoader } = GLTFLoaderModule;
+  const { ARButton } = ARButtonModule;
+
+  // --- RENDERER / SCENE / CAMERA ---
+  const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+  renderer.setPixelRatio(window.devicePixelRatio);
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  renderer.xr.enabled = true;
+
+  // importantes para PBR visível
+  renderer.outputEncoding = THREE.sRGBEncoding;
+  renderer.toneMapping = THREE.ACESFilmicToneMapping;
+  renderer.physicallyCorrectLights = true;
+
+  document.body.appendChild(renderer.domElement);
+
+  const scene = new THREE.Scene();
+  const camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.01, 20);
+
+  // --- LUZES: ambient + hemisphere + directional (torna PBR visível sem HDR)
+  const ambient = new THREE.AmbientLight(0xffffff, 0.4);
+  scene.add(ambient);
+
+  const hemi = new THREE.HemisphereLight(0xffffff, 0x444444, 0.6);
+  scene.add(hemi);
+
+  const dir = new THREE.DirectionalLight(0xffffff, 0.8);
+  dir.position.set(1, 2, 1);
+  scene.add(dir);
+
+  // --- RETICLE (hit-test) ---
+  const ring = new THREE.RingGeometry(0.07, 0.09, 32).rotateX(-Math.PI / 2);
+  const ringMat = new THREE.MeshBasicMaterial({ color: 0x00ffcc });
+  const reticle = new THREE.Mesh(ring, ringMat);
+  reticle.matrixAutoUpdate = false;
+  reticle.visible = false;
+  scene.add(reticle);
+
+  // --- LOADER & ANIMAÇÃO ---
+  const loader = new GLTFLoader();
+  let modelGLB = null;
+  let mixer = null;
+  const clock = new THREE.Clock();
+
+  loader.load('aha.glb', (gltf) => {
+    modelGLB = gltf.scene;
+    // ajusta escala se necessário
+    modelGLB.scale.set(0.5, 0.5, 0.5);
+
+    // debug: listar materiais e animações
+    const mats = [];
+    modelGLB.traverse((n) => { if (n.isMesh && n.material) mats.push(n.material.name || n.material.type); });
+    console.log('Materials encontrados (amostra):', mats.slice(0, 10));
+    console.log('Animações carregadas:', gltf.animations.length, gltf.animations.map(a => a.name));
+
+    // se houver animações, cria mixer e toca todas por padrão
+    if (gltf.animations && gltf.animations.length) {
+      mixer = new THREE.AnimationMixer(modelGLB);
+      gltf.animations.forEach((clip) => {
+        const action = mixer.clipAction(clip);
+        action.play();
+      });
+      console.log('AnimationMixer criado e animações iniciadas.');
+    }
+
+    // solução para materiais muito escuros: garantir que texturas usem sRGB (GLTFLoader normalmente faz isso)
+    modelGLB.traverse((node) => {
+      if (node.isMesh) {
+        // caso algum material venha com side errado ou precise ser visível dos dois lados:
+        // node.material.side = THREE.DoubleSide;
+        node.castShadow = false;
+        node.receiveShadow = false;
+        if (node.material) node.material.needsUpdate = true;
       }
-    } catch(e) {
-      showError('Erro ao checar aha.glb: ' + e);
-      document.getElementById('message').innerHTML = 'Erro de rede ao verificar model. Abra <a href="index_modelviewer.html">fallback model-viewer</a>.';
-      return;
-    }
+    });
 
-    // Agora importe os módulos de exemplos; com o importmap o 'three' será resolvido
-    let THREE, GLTFLoaderModule, ARButtonModule;
-    try {
-      // Importa módulos que internamente usam "three" (import map resolve)
-      THREE = await import('three');
-      GLTFLoaderModule = await import('https://cdn.jsdelivr.net/npm/three@0.154.0/examples/jsm/loaders/GLTFLoader.js');
-      ARButtonModule = await import('https://cdn.jsdelivr.net/npm/three@0.154.0/examples/jsm/webxr/ARButton.js');
-    } catch(err) {
-      showError('Falha ao carregar módulos Three.js via CDN/importmap: ' + err);
-      document.getElementById('message').innerHTML = 'WebXR não disponível aqui. Abra o <a href="index_modelviewer.html">fallback (model-viewer)</a>.';
-      return;
-    }
+    console.log('Modelo pronto para uso em cena.');
+  }, undefined, (err) => {
+    showError('Erro carregando aha.glb: ' + err);
+  });
 
-    const {GLTFLoader} = GLTFLoaderModule;
-    const {ARButton} = ARButtonModule;
+  // --- AR BUTTON / CONTROLLER ---
+  try {
+    document.body.appendChild(ARButton.createButton(renderer, { requiredFeatures: ['hit-test'] }));
+  } catch (e) {
+    showError('Erro ao criar botão AR: ' + e);
+  }
 
-    try {
-      const renderer = new THREE.WebGLRenderer({ antialias:true, alpha:true });
-      renderer.setPixelRatio(window.devicePixelRatio);
-      renderer.setSize(window.innerWidth, window.innerHeight);
-      renderer.xr.enabled = true;
-      document.body.appendChild(renderer.domElement);
+  const controller = renderer.xr.getController(0);
+  controller.addEventListener('select', () => {
+    if (!modelGLB || !reticle.visible) return;
+    const clone = modelGLB.clone(true);
+    clone.position.setFromMatrixPosition(reticle.matrix);
+    clone.quaternion.setFromRotationMatrix(reticle.matrix);
+    scene.add(clone);
+  });
+  scene.add(controller);
 
-      const scene = new THREE.Scene();
-      const camera = new THREE.PerspectiveCamera(70, window.innerWidth/window.innerHeight, 0.01, 20);
-      const light = new THREE.HemisphereLight(0xffffff, 0xbbbbff, 1);
-      scene.add(light);
+  // --- LOOP DE RENDER e HIT-TEST ---
+  const tempMatrix = new THREE.Matrix4();
+  renderer.setAnimationLoop((timestamp, frame) => {
+    // atualizar mixer de animação
+    const delta = clock.getDelta();
+    if (mixer) mixer.update(delta);
 
-      const ring = new THREE.RingGeometry(0.07, 0.09, 32).rotateX(-Math.PI/2);
-      const ringMat = new THREE.MeshBasicMaterial({color:0x00ffcc});
-      const reticle = new THREE.Mesh(ring, ringMat);
-      reticle.matrixAutoUpdate = false;
-      reticle.visible = false;
-      scene.add(reticle);
-
-      const loader = new GLTFLoader();
-      let modelGLB = null;
-      loader.load('aha.glb', (g) => {
-        modelGLB = g.scene;
-        modelGLB.scale.set(0.5,0.5,0.5);
-        document.getElementById('message').textContent = 'Modelo carregado — toque "Enter AR" (Chrome Android).';
-      }, undefined, (err) => {
-        showError('Erro carregando aha.glb: ' + err);
-        document.getElementById('message').innerHTML = 'Erro no carregamento do modelo. Abra <a href="index_modelviewer.html">fallback</a>.';
-      });
-
-      document.body.appendChild(ARButton.createButton(renderer, { requiredFeatures: ['hit-test'] }));
-
-      const controller = renderer.xr.getController(0);
-      controller.addEventListener('select', () => {
-        if(!modelGLB || !reticle.visible) return;
-        const clone = modelGLB.clone(true);
-        clone.position.setFromMatrixPosition(reticle.matrix);
-        clone.quaternion.setFromRotationMatrix(reticle.matrix);
-        scene.add(clone);
-      });
-      scene.add(controller);
-
-      const tempMatrix = new THREE.Matrix4();
-      renderer.setAnimationLoop((timestamp, frame) => {
-        if(frame){
-          const session = renderer.xr.getSession();
-          const referenceSpace = renderer.xr.getReferenceSpace();
-          if(!session._hitTestSourceRequested){
-            session._hitTestSourceRequested = true;
-            session.requestReferenceSpace('viewer').then(viewerSpace => {
-              session.requestHitTestSource({ space: viewerSpace }).then(src => session._hitTestSource = src)
-                .catch(e => console.warn('requestHitTestSource failed', e));
-            }).catch(e => console.warn('requestReferenceSpace failed', e));
-          }
-          const hitTestSource = session._hitTestSource;
-          if(hitTestSource){
-            const hitTestResults = frame.getHitTestResults(hitTestSource);
-            if(hitTestResults.length > 0){
-              const hit = hitTestResults[0];
-              const pose = hit.getPose(referenceSpace);
-              tempMatrix.fromArray(pose.transform.matrix);
-              reticle.matrix.copy(tempMatrix);
-              reticle.visible = true;
-            } else reticle.visible = false;
-          }
+    if (frame) {
+      const session = renderer.xr.getSession();
+      const referenceSpace = renderer.xr.getReferenceSpace();
+      if (session && !session._hitTestSourceRequested) {
+        session._hitTestSourceRequested = true;
+        session.requestReferenceSpace('viewer').then((viewerSpace) => {
+          session.requestHitTestSource({ space: viewerSpace }).then((src) => {
+            session._hitTestSource = src;
+          }).catch(e => console.warn('requestHitTestSource failed', e));
+        }).catch(e => console.warn('requestReferenceSpace failed', e));
+      }
+      const hitTestSource = session && session._hitTestSource;
+      if (hitTestSource) {
+        const hitTestResults = frame.getHitTestResults(hitTestSource);
+        if (hitTestResults.length > 0) {
+          const hit = hitTestResults[0];
+          const pose = hit.getPose(referenceSpace);
+          tempMatrix.fromArray(pose.transform.matrix);
+          reticle.matrix.copy(tempMatrix);
+          reticle.visible = true;
+        } else {
+          reticle.visible = false;
         }
-        renderer.render(scene, camera);
-      });
-
-      window.addEventListener('resize', () => {
-        camera.aspect = window.innerWidth/window.innerHeight;
-        camera.updateProjectionMatrix();
-        renderer.setSize(window.innerWidth, window.innerHeight);
-      });
-    } catch(e){
-      showError('Erro durante inicialização WebXR: ' + e);
-      document.getElementById('message').innerHTML = 'Erro de inicialização. Abra <a href="index_modelviewer.html">fallback</a>.';
+      }
     }
 
-  })();
-  </script>
+    renderer.render(scene, camera);
+  });
+
+  window.addEventListener('resize', () => {
+    camera.aspect = window.innerWidth / window.innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(window.innerWidth, window.innerHeight);
+  });
+
+})();
+</script>
 </body>
 </html>
