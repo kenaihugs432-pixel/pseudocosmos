@@ -1,9 +1,9 @@
 <!doctype html>
 <html lang="pt-BR">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>AR com WebXR — pseudocosmos (corrigido)</title>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>AR com WebXR — pseudocosmos (fix)</title>
   <style>
     body{margin:0;overflow:hidden;font-family:sans-serif;background:#000;color:#fff}
     #message{position:fixed;left:10px;top:10px;z-index:20;background:#fff;color:#000;padding:8px;border-radius:6px;box-shadow:0 2px 10px rgba(0,0,0,.2);max-width:calc(100% - 24px)}
@@ -33,11 +33,13 @@
     };
     const setMessage = m => document.getElementById('message').textContent = m;
 
-    // check GLB
+    // quick HEAD check do GLB
     try {
       const head = await fetch('aha.glb', { method: 'HEAD' });
       if (!head.ok) { showError('aha.glb não encontrado (HTTP ' + head.status + ')'); setMessage('aha.glb não encontrado. Abra fallback.'); return; }
-    } catch(e) { showError('Erro checando aha.glb: ' + e); return; }
+    } catch (e) {
+      showError('Erro checando aha.glb: ' + e); return;
+    }
 
     // importar libs
     let THREE, GLTFLoaderModule, ARButtonModule, SkeletonUtilsModule;
@@ -47,19 +49,26 @@
       ARButtonModule = await import('https://cdn.jsdelivr.net/npm/three@0.154.0/examples/jsm/webxr/ARButton.js');
       SkeletonUtilsModule = await import('https://cdn.jsdelivr.net/npm/three@0.154.0/examples/jsm/utils/SkeletonUtils.js');
     } catch (err) {
-      showError('Falha ao carregar libs: ' + err);
+      showError('Falha ao carregar libs via CDN/importmap: ' + err);
       setMessage('Erro carregando libs. Abra fallback.');
       return;
     }
     const { GLTFLoader } = GLTFLoaderModule;
     const { ARButton } = ARButtonModule;
-    const { SkeletonUtils } = SkeletonUtilsModule;
+
+    // detectar export do SkeletonUtils de forma robusta:
+    let SkeletonUtils = SkeletonUtilsModule.SkeletonUtils || SkeletonUtilsModule.default || SkeletonUtilsModule;
+    if (!SkeletonUtils || (typeof SkeletonUtils.clone !== 'function')) {
+      console.warn('SkeletonUtils não exportado na forma esperada — fallback para clone simples (isso pode impedir animações skinned em alguns modelos).');
+      SkeletonUtils = null;
+    }
 
     // renderer
     const renderer = new THREE.WebGLRenderer({ antialias:true, alpha:true });
     renderer.setPixelRatio(window.devicePixelRatio);
     renderer.setSize(window.innerWidth, window.innerHeight);
     renderer.xr.enabled = true;
+    // compat APIs antigas/novas
     if ('outputColorSpace' in renderer && THREE.SRGBColorSpace) renderer.outputColorSpace = THREE.SRGBColorSpace;
     else if ('outputEncoding' in renderer) renderer.outputEncoding = THREE.sRGBEncoding;
     if ('useLegacyLights' in renderer) renderer.useLegacyLights = false;
@@ -69,7 +78,7 @@
     const scene = new THREE.Scene();
     const camera = new THREE.PerspectiveCamera(70, window.innerWidth/window.innerHeight, 0.01, 20);
 
-    // lights
+    // luzes
     scene.add(new THREE.AmbientLight(0xffffff, 0.45));
     scene.add(new THREE.HemisphereLight(0xffffff, 0x444444, 0.6));
     const dir = new THREE.DirectionalLight(0xffffff, 0.7); dir.position.set(1,2,1); scene.add(dir);
@@ -79,7 +88,7 @@
     const ringMat = new THREE.MeshBasicMaterial({ color: 0x00ff88 });
     const reticle = new THREE.Mesh(ring, ringMat); reticle.matrixAutoUpdate = false; reticle.visible = false; scene.add(reticle);
 
-    // pmrem + env (opcional)
+    // PMREM + env
     const pmrem = new THREE.PMREMGenerator(renderer); pmrem.compileEquirectangularShader();
     try {
       const tl = new THREE.TextureLoader();
@@ -94,7 +103,7 @@
       console.log('Environment aplicado');
     } catch(e) { console.warn('Env falhou (não crítico):', e); }
 
-    // gltf loader
+    // GLTF loader
     const loader = new GLTFLoader();
     let baseGLTF = null;
     let modelPrototype = null;
@@ -105,14 +114,13 @@
       modelPrototype = gltf.scene;
       modelPrototype.scale.set(0.5,0.5,0.5);
 
-      // small safe fallback nos materiais
+      // safe material fallbacks pra debug/visibilidade
       modelPrototype.traverse(n => {
         if (n.isMesh && n.material) {
           n.material.side = THREE.DoubleSide;
           if (n.material.metalness !== undefined && n.material.metalness > 0.9) n.material.metalness = 0.6;
           if (n.material.roughness !== undefined && n.material.roughness < 0.1) n.material.roughness = 0.5;
-          // normalize texture colorSpace/encoding compat
-          ['map','normalMap','metalnessMap','roughnessMap','emissiveMap'].forEach(k=>{
+          ['map','normalMap','metalnessMap','roughnessMap','emissiveMap'].forEach(k => {
             if (n.material[k]) {
               const t = n.material[k];
               if ('colorSpace' in t) t.colorSpace = (THREE.SRGBColorSpace ? THREE.SRGBColorSpace : t.colorSpace);
@@ -123,11 +131,32 @@
         }
       });
 
-      console.log('Modelo carregado — materiais e animações:', gltf.animations.length, gltf.animations.map(a=>a.name));
+      console.log('Modelo carregado — animações:', gltf.animations.length, gltf.animations.map(a=>a.name));
       modelReady = true;
       setMessage('Modelo carregado. Aguarde o reticle e toque para colocar.');
-      // criar preview (somente se ainda não criado)
-      tryCreatePreview();
+
+      // criar preview (apenas quando modelPrototype definido)
+      if (!previewCreated) {
+        if (modelPrototype) {
+          // cria preview usando SkeletonUtils se disponível, senão fallback para clone simples
+          try {
+            const preview = (SkeletonUtils ? SkeletonUtils.clone(modelPrototype) : modelPrototype.clone(true));
+            preview.position.set(0, -0.25, -0.8);
+            scene.add(preview);
+            if (baseGLTF.animations && baseGLTF.animations.length) {
+              const m = new THREE.AnimationMixer(preview);
+              baseGLTF.animations.forEach(clip => m.clipAction(clip).play());
+              mixers.push(m);
+              console.log('Preview criado e animação iniciada (mixers=', mixers.length, ')');
+            } else console.log('Preview criado (sem animações).');
+            previewCreated = true;
+          } catch(e) {
+            console.warn('Falha ao criar preview (clone):', e);
+          }
+        } else {
+          console.warn('Preview aguardando modelPrototype');
+        }
+      }
     }, undefined, (err) => {
       showError('Erro carregando aha.glb: ' + err);
     });
@@ -137,54 +166,29 @@
     catch(e) { showError('Erro criando botão AR: ' + e); }
 
     // mixers e clock
-    const mixers = []; const clock = new THREE.Clock();
+    const mixers = [];
+    const clock = new THREE.Clock();
 
-    // tryCreatePreview agora protege contra modelPrototype undefined
-    function tryCreatePreview() {
-      if (!modelPrototype) {
-        console.warn('tryCreatePreview: model não pronto ainda — aguardando');
-        return;
-      }
-      if (previewCreated) return;
-      const preview = SkeletonUtils.clone(modelPrototype);
-      preview.position.set(0, -0.25, -0.8);
-      scene.add(preview);
-      if (baseGLTF && baseGLTF.animations && baseGLTF.animations.length) {
-        const m = new THREE.AnimationMixer(preview);
-        baseGLTF.animations.forEach(clip => m.clipAction(clip).play());
-        mixers.push(m);
-        console.log('Preview criado e animação iniciada (mixers=', mixers.length, ')');
-      } else {
-        console.log('Preview criado, sem animações no GLTF.');
-      }
-      previewCreated = true;
-    }
-
-    // handler select: só permite colocar se modelReady == true
+    // handler seletor (apenas quando modelReady)
     const controller = renderer.xr.getController(0);
     controller.addEventListener('select', () => {
-      if (!modelReady) {
-        setMessage('Modelo ainda carregando — aguarde alguns segundos e tente novamente.');
-        console.warn('Select ignorado: modelo não pronto');
-        return;
-      }
-      if (!reticle.visible) {
-        setMessage('Aponte a câmera para uma superfície até o anel aparecer.');
-        return;
-      }
-      // clona corretamente com SkeletonUtils
-      const clone = SkeletonUtils.clone(modelPrototype);
-      clone.position.setFromMatrixPosition(reticle.matrix);
-      clone.quaternion.setFromRotationMatrix(reticle.matrix);
-      scene.add(clone);
-      // cria mixer para esse clone (se houver animações)
-      if (baseGLTF && baseGLTF.animations && baseGLTF.animations.length) {
-        const m = new THREE.AnimationMixer(clone);
-        baseGLTF.animations.forEach(clip => m.clipAction(clip).play());
-        mixers.push(m);
-        console.log('Clone adicionado e animação iniciada (mixers=', mixers.length, ')');
-      } else {
-        console.log('Clone adicionado (sem animações presentes).');
+      if (!modelReady) { setMessage('Modelo ainda carregando — aguarde.'); console.warn('Select ignorado: modelo não pronto'); return; }
+      if (!reticle.visible) { setMessage('Aponte a câmera até o anel aparecer.'); return; }
+
+      try {
+        const clone = (SkeletonUtils ? SkeletonUtils.clone(modelPrototype) : modelPrototype.clone(true));
+        clone.position.setFromMatrixPosition(reticle.matrix);
+        clone.quaternion.setFromRotationMatrix(reticle.matrix);
+        scene.add(clone);
+
+        if (baseGLTF && baseGLTF.animations && baseGLTF.animations.length) {
+          const m = new THREE.AnimationMixer(clone);
+          baseGLTF.animations.forEach(clip => m.clipAction(clip).play());
+          mixers.push(m);
+          console.log('Clone adicionado e animação iniciada (mixers=', mixers.length, ')');
+        } else console.log('Clone adicionado (sem animações).');
+      } catch (e) {
+        showError('Falha ao clonar/colocar modelo: ' + e);
       }
     });
     scene.add(controller);
@@ -231,4 +235,3 @@
   </script>
 </body>
 </html>
-
