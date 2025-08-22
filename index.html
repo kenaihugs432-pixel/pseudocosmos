@@ -11,6 +11,16 @@
     canvas {width:100%;height:100%}
     a{color:blue}
   </style>
+
+  <!-- IMPORT MAP: mapeia "three" para o módulo no CDN -->
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.154.0/build/three.module.js",
+      "three/": "https://cdn.jsdelivr.net/npm/three@0.154.0/"
+    }
+  }
+  </script>
 </head>
 <body>
   <div id="message">Iniciando AR… (se ficar em branco, abra o console do navegador)</div>
@@ -25,7 +35,7 @@
       console.error(txt);
     };
 
-    // check GLB exists
+    // Verifica se aha.glb existe
     try {
       const resp = await fetch('aha.glb', {method:'HEAD'});
       if(!resp.ok){
@@ -39,19 +49,21 @@
       return;
     }
 
-    // IMPORTS com CDN (paths absolutos)
-    let THREE, GLTFLoader, ARButton;
+    // Agora importe os módulos de exemplos; com o importmap o 'three' será resolvido
+    let THREE, GLTFLoaderModule, ARButtonModule;
     try {
-      THREE = await import('https://cdn.jsdelivr.net/npm/three@0.154.0/build/three.module.js');
-      const gltfMod = await import('https://cdn.jsdelivr.net/npm/three@0.154.0/examples/jsm/loaders/GLTFLoader.js');
-      const arMod = await import('https://cdn.jsdelivr.net/npm/three@0.154.0/examples/jsm/webxr/ARButton.js');
-      GLTFLoader = gltfMod.GLTFLoader;
-      ARButton = arMod.ARButton;
+      // Importa módulos que internamente usam "three" (import map resolve)
+      THREE = await import('three');
+      GLTFLoaderModule = await import('https://cdn.jsdelivr.net/npm/three@0.154.0/examples/jsm/loaders/GLTFLoader.js');
+      ARButtonModule = await import('https://cdn.jsdelivr.net/npm/three@0.154.0/examples/jsm/webxr/ARButton.js');
     } catch(err) {
-      showError('Falha ao carregar Three.js via CDN: ' + err);
+      showError('Falha ao carregar módulos Three.js via CDN/importmap: ' + err);
       document.getElementById('message').innerHTML = 'WebXR não disponível aqui. Abra o <a href="index_modelviewer.html">fallback (model-viewer)</a>.';
       return;
     }
+
+    const {GLTFLoader} = GLTFLoaderModule;
+    const {ARButton} = ARButtonModule;
 
     try {
       const renderer = new THREE.WebGLRenderer({ antialias:true, alpha:true });
