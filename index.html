@@ -12,7 +12,7 @@
     a{color:blue}
   </style>
 
-  <!-- IMPORT MAP para resolver "three" usado nos exemplos -->
+  <!-- import map para resolver "three" nos exemplos -->
   <script type="importmap">
   {
     "imports": {
@@ -23,32 +23,32 @@
   </script>
 </head>
 <body>
-  <div id="message">Iniciando AR…</div>
+  <div id="message">Iniciando…</div>
   <div id="errorBox"></div>
 
   <script type="module">
   (async () => {
-    const showError = (txt) => {
+    const showError = txt => {
       const box = document.getElementById('errorBox');
       box.style.display = 'block';
       box.textContent += txt + "\n\n";
       console.error(txt);
     };
 
-    // 1) checar GLB
+    // quick head check do GLB
     try {
-      const resp = await fetch('aha.glb', { method: 'HEAD' });
-      if (!resp.ok) {
-        showError('Arquivo aha.glb não encontrado (HTTP ' + resp.status + ').');
+      const r = await fetch('aha.glb', { method: 'HEAD' });
+      if (!r.ok) {
+        showError('aha.glb não encontrado (HTTP ' + r.status + '). Verifique upload/nome (case-sensitive).');
         document.getElementById('message').innerHTML = 'aha.glb não encontrado. Abra <a href="index_modelviewer.html">fallback</a>.';
         return;
       }
     } catch (e) {
-      showError('Erro ao verificar aha.glb: ' + e);
+      showError('Erro checando aha.glb: ' + e);
       return;
     }
 
-    // 2) importar módulos (com importmap -> "three" resolve)
+    // import libs
     let THREE, GLTFLoaderModule, ARButtonModule, SkeletonUtilsModule;
     try {
       THREE = await import('three');
@@ -56,153 +56,182 @@
       ARButtonModule = await import('https://cdn.jsdelivr.net/npm/three@0.154.0/examples/jsm/webxr/ARButton.js');
       SkeletonUtilsModule = await import('https://cdn.jsdelivr.net/npm/three@0.154.0/examples/jsm/utils/SkeletonUtils.js');
     } catch (err) {
-      showError('Falha ao carregar módulos Three.js via CDN/importmap: ' + err);
-      document.getElementById('message').innerHTML = 'Erro ao carregar bibliotecas. Abra <a href="index_modelviewer.html">fallback</a>.';
+      showError('Falha ao carregar Three.js/extras via CDN/importmap: ' + err);
+      document.getElementById('message').innerHTML = 'Erro carregando libs. Abra <a href="index_modelviewer.html">fallback</a>.';
       return;
     }
     const { GLTFLoader } = GLTFLoaderModule;
     const { ARButton } = ARButtonModule;
     const { SkeletonUtils } = SkeletonUtilsModule;
 
-    // 3) renderer (API nova)
+    // renderer
     const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
     renderer.setPixelRatio(window.devicePixelRatio);
     renderer.setSize(window.innerWidth, window.innerHeight);
     renderer.xr.enabled = true;
-    // usar a API atual em vez de outputEncoding / physicallyCorrectLights
-    // set outputColorSpace e useLegacyLights
-    if ( 'outputColorSpace' in renderer ) {
-      renderer.outputColorSpace = THREE.SRGBColorSpace;
-    } else if ('outputEncoding' in renderer) {
-      renderer.outputEncoding = THREE.sRGBEncoding; // fallback (antiga API)
-    }
-    if ('useLegacyLights' in renderer) {
-      renderer.useLegacyLights = false;
-    }
 
-    // toneMapping opcional
-    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    // compatibilidade: outputColorSpace / outputEncoding
+    if ('outputColorSpace' in renderer && THREE.SRGBColorSpace) {
+      renderer.outputColorSpace = THREE.SRGBColorSpace;
+    } else if ('outputEncoding' in renderer && THREE.sRGBEncoding) {
+      renderer.outputEncoding = THREE.sRGBEncoding;
+    }
+    // legacy lights flag
+    if ('useLegacyLights' in renderer) renderer.useLegacyLights = false;
+
+    // tone mapping opcional
+    if (THREE.ACESFilmicToneMapping) renderer.toneMapping = THREE.ACESFilmicToneMapping;
+
     document.body.appendChild(renderer.domElement);
 
     const scene = new THREE.Scene();
-    const camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.01, 20);
+    const camera = new THREE.PerspectiveCamera(70, window.innerWidth/window.innerHeight, 0.01, 20);
 
-    // LUZES básicas (fallback)
-    scene.add(new THREE.AmbientLight(0xffffff, 0.4));
+    // luzes fallback
+    scene.add(new THREE.AmbientLight(0xffffff, 0.45));
     scene.add(new THREE.HemisphereLight(0xffffff, 0x444444, 0.6));
-    const dir = new THREE.DirectionalLight(0xffffff, 0.8);
-    dir.position.set(1, 2, 1);
+    const dir = new THREE.DirectionalLight(0xffffff, 0.7);
+    dir.position.set(1,2,1);
     scene.add(dir);
 
-    // Reticle
-    const ring = new THREE.RingGeometry(0.07, 0.09, 32).rotateX(-Math.PI / 2);
+    // reticle
+    const ring = new THREE.RingGeometry(0.07, 0.09, 32).rotateX(-Math.PI/2);
     const ringMat = new THREE.MeshBasicMaterial({ color: 0x00ffcc });
     const reticle = new THREE.Mesh(ring, ringMat);
     reticle.matrixAutoUpdate = false;
     reticle.visible = false;
     scene.add(reticle);
 
-    // PMREM + environment (melhora reflexos de materiais metálicos)
+    // PMREM env (melhora metal/rough)
     const pmremGenerator = new THREE.PMREMGenerator(renderer);
     pmremGenerator.compileEquirectangularShader();
 
-    // carrega uma imagem equirectangular leve (CDN do three)
-    // se quiser trocar, substitua URL por outra equirectangular
+    // carregar env e aplicar com correção de colorSpace/encoding
     try {
       const texLoader = new THREE.TextureLoader();
-      const envUrl = 'https://threejs.org/examples/textures/2294472375_24a3b8ef46_o.jpg';
-      const envTex = await new Promise((res, rej) => {
-        texLoader.load(envUrl, res, undefined, rej);
-      });
+      const envUrl = 'https://threejs.org/examples/textures/2294472375_24a3b8ef46_o.jpg'; // leve
+      const envTex = await new Promise((res, rej) => texLoader.load(envUrl, res, undefined, rej));
       envTex.mapping = THREE.EquirectangularReflectionMapping;
-      envTex.encoding = THREE.sRGBEncoding;
+      // compat: colorSpace vs encoding
+      if ('colorSpace' in envTex) envTex.colorSpace = (THREE.SRGBColorSpace ? THREE.SRGBColorSpace : envTex.colorSpace);
+      else if ('encoding' in envTex) envTex.encoding = THREE.sRGBEncoding;
       const envMap = pmremGenerator.fromEquirectangular(envTex).texture;
       scene.environment = envMap;
-      // opcional definir background
-      // scene.background = envMap;
       envTex.dispose();
       pmremGenerator.dispose();
-      console.log('Environment map aplicado.');
+      console.log('Environment aplicado.');
     } catch (e) {
-      console.warn('Não foi possível carregar environment map:', e);
+      console.warn('Falha ao carregar environment (não crítico):', e);
     }
 
-    // Loader GLTF
+    // loader gltf
     const loader = new GLTFLoader();
-    let baseGLTF = null; // gltf inteiro (para pegar animations)
-    let modelPrototype = null; // a cena do gltf
+    let baseGLTF = null;
+    let modelPrototype = null;
     loader.load('aha.glb', (gltf) => {
       baseGLTF = gltf;
       modelPrototype = gltf.scene;
-      // reduzir escala se necessário (ajuste conforme seu modelo)
-      modelPrototype.scale.set(0.5, 0.5, 0.5);
+      modelPrototype.scale.set(0.5,0.5,0.5);
 
-      // debug: listar materiais e animações
+      // quick fix fallback nos materiais para visualização:
+      modelPrototype.traverse(node => {
+        if (node.isMesh && node.material) {
+          // force double side pra verificar se normals estavam invertidas
+          node.material.side = THREE.DoubleSide;
+          // se estiver preto por metalness/roughness, reduz temporariamente (apenas para debug)
+          if ((node.material.metalness !== undefined && node.material.metalness > 0.9) ||
+              (node.material.roughness !== undefined && node.material.roughness < 0.1)) {
+            node.material.metalness = Math.min(node.material.metalness || 0, 0.6);
+            node.material.roughness = Math.max(node.material.roughness || 0.5, 0.5);
+          }
+          // garantir que mapas usem colorSpace correto (compat)
+          const maps = ['map','normalMap','metalnessMap','roughnessMap','emissiveMap'];
+          maps.forEach(k => {
+            if (node.material[k]) {
+              const t = node.material[k];
+              if ('colorSpace' in t) t.colorSpace = (THREE.SRGBColorSpace ? THREE.SRGBColorSpace : t.colorSpace);
+              else if ('encoding' in t) t.encoding = THREE.sRGBEncoding;
+            }
+          });
+          node.material.needsUpdate = true;
+        }
+      });
+
+      // debug logs
       const mats = [];
-      modelPrototype.traverse((n) => { if (n.isMesh && n.material) mats.push(n.material.name || n.material.type); });
-      console.log('Materials (exemplo):', mats.slice(0,10));
-      console.log('Animações no GLTF:', gltf.animations.length, gltf.animations.map(a => a.name));
+      modelPrototype.traverse(n => { if (n.isMesh && n.material) mats.push(n.material.name || n.material.type); });
+      console.log('Materials (ex):', mats.slice(0,10));
+      console.log('Animações encontradas:', gltf.animations.length, gltf.animations.map(a=>a.name));
 
-      document.getElementById('message').textContent = 'Modelo pronto. Entre em AR e toque para colocar (Chrome Android).';
+      document.getElementById('message').textContent = 'Modelo carregado. No desktop você verá um preview à frente da câmera; no Android toque "Enter AR".';
+      // criar preview no centro da tela (desktop/preview)
+      tryCreatePreview();
     }, undefined, (err) => {
       showError('Erro carregando aha.glb: ' + err);
     });
 
-    // AR button & controllers
-    try {
-      document.body.appendChild(ARButton.createButton(renderer, { requiredFeatures: ['hit-test'] }));
-    } catch (e) {
-      showError('Erro ao criar botão AR: ' + e);
-    }
+    // AR button
+    try { document.body.appendChild(ARButton.createButton(renderer, { requiredFeatures: ['hit-test'] })); }
+    catch(e){ showError('Erro criando botão AR: ' + e); }
 
-    // armazenar mixers dos clones
+    // mixers
     const mixers = [];
     const clock = new THREE.Clock();
 
-    // ao tocar, clona com SkeletonUtils e cria mixer para a clone
+    // função para criar preview (não-AR) para você ver animação/visual no desktop
+    function tryCreatePreview() {
+      if (!modelPrototype) return;
+      // clone com SkeletonUtils para manter skeleton/skin
+      const preview = SkeletonUtils.clone(modelPrototype);
+      // posiciona um pouco à frente da câmera
+      preview.position.set(0, -0.2, -0.8);
+      // garantir que fique visível mesmo sem AR (adiciona à cena e também remove depois se quiser)
+      scene.add(preview);
+
+      // se houver animações, cria mixer para preview
+      if (baseGLTF && baseGLTF.animations && baseGLTF.animations.length) {
+        const m = new THREE.AnimationMixer(preview);
+        baseGLTF.animations.forEach(clip => {
+          const action = m.clipAction(clip);
+          action.play();
+        });
+        mixers.push(m);
+        console.log('Preview criado e animação iniciada (mixers = ' + mixers.length + ')');
+      }
+    }
+
+    // evento de colocar no AR (clona na posição do reticle)
     const controller = renderer.xr.getController(0);
     controller.addEventListener('select', () => {
-      if (!modelPrototype) {
-        console.warn('Modelo ainda não carregado');
-        return;
-      }
+      if (!modelPrototype) return;
       if (!reticle.visible) return;
-
-      // clone que mantém skeleton/skin
       const clone = SkeletonUtils.clone(modelPrototype);
       clone.position.setFromMatrixPosition(reticle.matrix);
       clone.quaternion.setFromRotationMatrix(reticle.matrix);
       scene.add(clone);
-
-      // se gltf tiver animações, cria mixer para o clone e toca os clips
       if (baseGLTF && baseGLTF.animations && baseGLTF.animations.length) {
-        const cloneMixer = new THREE.AnimationMixer(clone);
-        baseGLTF.animations.forEach(clip => {
-          const action = cloneMixer.clipAction(clip);
-          action.play();
-        });
-        mixers.push(cloneMixer);
-        console.log('Clone colocado e animação iniciada (mixers count = ' + mixers.length + ')');
+        const m = new THREE.AnimationMixer(clone);
+        baseGLTF.animations.forEach(clip => m.clipAction(clip).play());
+        mixers.push(m);
+        console.log('Clone adicionado no AR e animação iniciada (mixers = ' + mixers.length + ')');
       }
     });
     scene.add(controller);
 
-    // loop render + hit-test
+    // loop
     const tmpMat = new THREE.Matrix4();
     renderer.setAnimationLoop((timestamp, frame) => {
       const delta = clock.getDelta();
-      // atualizar todos mixers (originais e clones)
-      for (const m of mixers) m.update(delta);
+      for (const mm of mixers) mm.update(delta);
 
       if (frame) {
         const session = renderer.xr.getSession();
         const referenceSpace = renderer.xr.getReferenceSpace();
         if (session && !session._hitTestSourceRequested) {
           session._hitTestSourceRequested = true;
-          session.requestReferenceSpace('viewer').then((viewerSpace) => {
-            session.requestHitTestSource({ space: viewerSpace }).then((src) => {
-              session._hitTestSource = src;
-            }).catch(e => console.warn('requestHitTestSource failed', e));
+          session.requestReferenceSpace('viewer').then(viewerSpace => {
+            session.requestHitTestSource({ space: viewerSpace }).then(src => session._hitTestSource = src)
+            .catch(e => console.warn('requestHitTestSource failed', e));
           }).catch(e => console.warn('requestReferenceSpace failed', e));
         }
         const hitTestSource = session && session._hitTestSource;
@@ -214,17 +243,14 @@
             tmpMat.fromArray(pose.transform.matrix);
             reticle.matrix.copy(tmpMat);
             reticle.visible = true;
-          } else {
-            reticle.visible = false;
-          }
+          } else reticle.visible = false;
         }
       }
-
       renderer.render(scene, camera);
     });
 
     window.addEventListener('resize', () => {
-      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.aspect = window.innerWidth/window.innerHeight;
       camera.updateProjectionMatrix();
       renderer.setSize(window.innerWidth, window.innerHeight);
     });
@@ -233,3 +259,4 @@
   </script>
 </body>
 </html>
+
