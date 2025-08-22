@@ -73,6 +73,7 @@
     else if ('outputEncoding' in renderer) renderer.outputEncoding = THREE.sRGBEncoding;
     if ('useLegacyLights' in renderer) renderer.useLegacyLights = false;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 1.4;
     document.body.appendChild(renderer.domElement);
 
     const scene = new THREE.Scene();
