@@ -12,7 +12,7 @@
     a{color:blue}
   </style>
 
-  <!-- IMPORT MAP: mapeia "three" para o módulo no CDN -->
+  <!-- IMPORT MAP para resolver "three" usado nos exemplos -->
   <script type="importmap">
   {
     "imports": {
@@ -23,181 +23,213 @@
   </script>
 </head>
 <body>
-  <div id="message">Iniciando AR… (se ficar em branco, abra o console do navegador)</div>
+  <div id="message">Iniciando AR…</div>
   <div id="errorBox"></div>
 
-<script type="module">
-(async () => {
-  const showError = (txt) => {
-    const box = document.getElementById('errorBox');
-    box.style.display = 'block';
-    box.textContent += txt + "\n\n";
-    console.error(txt);
-  };
+  <script type="module">
+  (async () => {
+    const showError = (txt) => {
+      const box = document.getElementById('errorBox');
+      box.style.display = 'block';
+      box.textContent += txt + "\n\n";
+      console.error(txt);
+    };
 
-  // verifica GLB
-  try {
-    const resp = await fetch('aha.glb', { method: 'HEAD' });
-    if (!resp.ok) {
-      showError('Arquivo aha.glb não encontrado (HTTP ' + resp.status + '). Verifique o upload/nome (case-sensitive).');
+    // 1) checar GLB
+    try {
+      const resp = await fetch('aha.glb', { method: 'HEAD' });
+      if (!resp.ok) {
+        showError('Arquivo aha.glb não encontrado (HTTP ' + resp.status + ').');
+        document.getElementById('message').innerHTML = 'aha.glb não encontrado. Abra <a href="index_modelviewer.html">fallback</a>.';
+        return;
+      }
+    } catch (e) {
+      showError('Erro ao verificar aha.glb: ' + e);
       return;
     }
-  } catch (e) {
-    showError('Erro ao checar aha.glb: ' + e);
-    return;
-  }
 
-  // importar módulos (import map resolve 'three')
-  let THREE, GLTFLoaderModule, ARButtonModule;
-  try {
-    THREE = await import('three');
-    GLTFLoaderModule = await import('https://cdn.jsdelivr.net/npm/three@0.154.0/examples/jsm/loaders/GLTFLoader.js');
-    ARButtonModule = await import('https://cdn.jsdelivr.net/npm/three@0.154.0/examples/jsm/webxr/ARButton.js');
-  } catch (err) {
-    showError('Falha ao carregar Three.js via CDN/importmap: ' + err);
-    return;
-  }
-  const { GLTFLoader } = GLTFLoaderModule;
-  const { ARButton } = ARButtonModule;
+    // 2) importar módulos (com importmap -> "three" resolve)
+    let THREE, GLTFLoaderModule, ARButtonModule, SkeletonUtilsModule;
+    try {
+      THREE = await import('three');
+      GLTFLoaderModule = await import('https://cdn.jsdelivr.net/npm/three@0.154.0/examples/jsm/loaders/GLTFLoader.js');
+      ARButtonModule = await import('https://cdn.jsdelivr.net/npm/three@0.154.0/examples/jsm/webxr/ARButton.js');
+      SkeletonUtilsModule = await import('https://cdn.jsdelivr.net/npm/three@0.154.0/examples/jsm/utils/SkeletonUtils.js');
+    } catch (err) {
+      showError('Falha ao carregar módulos Three.js via CDN/importmap: ' + err);
+      document.getElementById('message').innerHTML = 'Erro ao carregar bibliotecas. Abra <a href="index_modelviewer.html">fallback</a>.';
+      return;
+    }
+    const { GLTFLoader } = GLTFLoaderModule;
+    const { ARButton } = ARButtonModule;
+    const { SkeletonUtils } = SkeletonUtilsModule;
 
-  // --- RENDERER / SCENE / CAMERA ---
-  const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
-  renderer.setPixelRatio(window.devicePixelRatio);
-  renderer.setSize(window.innerWidth, window.innerHeight);
-  renderer.xr.enabled = true;
-
-  // importantes para PBR visível
-  renderer.outputEncoding = THREE.sRGBEncoding;
-  renderer.toneMapping = THREE.ACESFilmicToneMapping;
-  renderer.physicallyCorrectLights = true;
-
-  document.body.appendChild(renderer.domElement);
-
-  const scene = new THREE.Scene();
-  const camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.01, 20);
-
-  // --- LUZES: ambient + hemisphere + directional (torna PBR visível sem HDR)
-  const ambient = new THREE.AmbientLight(0xffffff, 0.4);
-  scene.add(ambient);
-
-  const hemi = new THREE.HemisphereLight(0xffffff, 0x444444, 0.6);
-  scene.add(hemi);
-
-  const dir = new THREE.DirectionalLight(0xffffff, 0.8);
-  dir.position.set(1, 2, 1);
-  scene.add(dir);
-
-  // --- RETICLE (hit-test) ---
-  const ring = new THREE.RingGeometry(0.07, 0.09, 32).rotateX(-Math.PI / 2);
-  const ringMat = new THREE.MeshBasicMaterial({ color: 0x00ffcc });
-  const reticle = new THREE.Mesh(ring, ringMat);
-  reticle.matrixAutoUpdate = false;
-  reticle.visible = false;
-  scene.add(reticle);
-
-  // --- LOADER & ANIMAÇÃO ---
-  const loader = new GLTFLoader();
-  let modelGLB = null;
-  let mixer = null;
-  const clock = new THREE.Clock();
-
-  loader.load('aha.glb', (gltf) => {
-    modelGLB = gltf.scene;
-    // ajusta escala se necessário
-    modelGLB.scale.set(0.5, 0.5, 0.5);
-
-    // debug: listar materiais e animações
-    const mats = [];
-    modelGLB.traverse((n) => { if (n.isMesh && n.material) mats.push(n.material.name || n.material.type); });
-    console.log('Materials encontrados (amostra):', mats.slice(0, 10));
-    console.log('Animações carregadas:', gltf.animations.length, gltf.animations.map(a => a.name));
-
-    // se houver animações, cria mixer e toca todas por padrão
-    if (gltf.animations && gltf.animations.length) {
-      mixer = new THREE.AnimationMixer(modelGLB);
-      gltf.animations.forEach((clip) => {
-        const action = mixer.clipAction(clip);
-        action.play();
-      });
-      console.log('AnimationMixer criado e animações iniciadas.');
+    // 3) renderer (API nova)
+    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+    renderer.setPixelRatio(window.devicePixelRatio);
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.xr.enabled = true;
+    // usar a API atual em vez de outputEncoding / physicallyCorrectLights
+    // set outputColorSpace e useLegacyLights
+    if ( 'outputColorSpace' in renderer ) {
+      renderer.outputColorSpace = THREE.SRGBColorSpace;
+    } else if ('outputEncoding' in renderer) {
+      renderer.outputEncoding = THREE.sRGBEncoding; // fallback (antiga API)
+    }
+    if ('useLegacyLights' in renderer) {
+      renderer.useLegacyLights = false;
     }
 
-    // solução para materiais muito escuros: garantir que texturas usem sRGB (GLTFLoader normalmente faz isso)
-    modelGLB.traverse((node) => {
-      if (node.isMesh) {
-        // caso algum material venha com side errado ou precise ser visível dos dois lados:
-        // node.material.side = THREE.DoubleSide;
-        node.castShadow = false;
-        node.receiveShadow = false;
-        if (node.material) node.material.needsUpdate = true;
-      }
+    // toneMapping opcional
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    document.body.appendChild(renderer.domElement);
+
+    const scene = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.01, 20);
+
+    // LUZES básicas (fallback)
+    scene.add(new THREE.AmbientLight(0xffffff, 0.4));
+    scene.add(new THREE.HemisphereLight(0xffffff, 0x444444, 0.6));
+    const dir = new THREE.DirectionalLight(0xffffff, 0.8);
+    dir.position.set(1, 2, 1);
+    scene.add(dir);
+
+    // Reticle
+    const ring = new THREE.RingGeometry(0.07, 0.09, 32).rotateX(-Math.PI / 2);
+    const ringMat = new THREE.MeshBasicMaterial({ color: 0x00ffcc });
+    const reticle = new THREE.Mesh(ring, ringMat);
+    reticle.matrixAutoUpdate = false;
+    reticle.visible = false;
+    scene.add(reticle);
+
+    // PMREM + environment (melhora reflexos de materiais metálicos)
+    const pmremGenerator = new THREE.PMREMGenerator(renderer);
+    pmremGenerator.compileEquirectangularShader();
+
+    // carrega uma imagem equirectangular leve (CDN do three)
+    // se quiser trocar, substitua URL por outra equirectangular
+    try {
+      const texLoader = new THREE.TextureLoader();
+      const envUrl = 'https://threejs.org/examples/textures/2294472375_24a3b8ef46_o.jpg';
+      const envTex = await new Promise((res, rej) => {
+        texLoader.load(envUrl, res, undefined, rej);
+      });
+      envTex.mapping = THREE.EquirectangularReflectionMapping;
+      envTex.encoding = THREE.sRGBEncoding;
+      const envMap = pmremGenerator.fromEquirectangular(envTex).texture;
+      scene.environment = envMap;
+      // opcional definir background
+      // scene.background = envMap;
+      envTex.dispose();
+      pmremGenerator.dispose();
+      console.log('Environment map aplicado.');
+    } catch (e) {
+      console.warn('Não foi possível carregar environment map:', e);
+    }
+
+    // Loader GLTF
+    const loader = new GLTFLoader();
+    let baseGLTF = null; // gltf inteiro (para pegar animations)
+    let modelPrototype = null; // a cena do gltf
+    loader.load('aha.glb', (gltf) => {
+      baseGLTF = gltf;
+      modelPrototype = gltf.scene;
+      // reduzir escala se necessário (ajuste conforme seu modelo)
+      modelPrototype.scale.set(0.5, 0.5, 0.5);
+
+      // debug: listar materiais e animações
+      const mats = [];
+      modelPrototype.traverse((n) => { if (n.isMesh && n.material) mats.push(n.material.name || n.material.type); });
+      console.log('Materials (exemplo):', mats.slice(0,10));
+      console.log('Animações no GLTF:', gltf.animations.length, gltf.animations.map(a => a.name));
+
+      document.getElementById('message').textContent = 'Modelo pronto. Entre em AR e toque para colocar (Chrome Android).';
+    }, undefined, (err) => {
+      showError('Erro carregando aha.glb: ' + err);
     });
 
-    console.log('Modelo pronto para uso em cena.');
-  }, undefined, (err) => {
-    showError('Erro carregando aha.glb: ' + err);
-  });
-
-  // --- AR BUTTON / CONTROLLER ---
-  try {
-    document.body.appendChild(ARButton.createButton(renderer, { requiredFeatures: ['hit-test'] }));
-  } catch (e) {
-    showError('Erro ao criar botão AR: ' + e);
-  }
-
-  const controller = renderer.xr.getController(0);
-  controller.addEventListener('select', () => {
-    if (!modelGLB || !reticle.visible) return;
-    const clone = modelGLB.clone(true);
-    clone.position.setFromMatrixPosition(reticle.matrix);
-    clone.quaternion.setFromRotationMatrix(reticle.matrix);
-    scene.add(clone);
-  });
-  scene.add(controller);
-
-  // --- LOOP DE RENDER e HIT-TEST ---
-  const tempMatrix = new THREE.Matrix4();
-  renderer.setAnimationLoop((timestamp, frame) => {
-    // atualizar mixer de animação
-    const delta = clock.getDelta();
-    if (mixer) mixer.update(delta);
-
-    if (frame) {
-      const session = renderer.xr.getSession();
-      const referenceSpace = renderer.xr.getReferenceSpace();
-      if (session && !session._hitTestSourceRequested) {
-        session._hitTestSourceRequested = true;
-        session.requestReferenceSpace('viewer').then((viewerSpace) => {
-          session.requestHitTestSource({ space: viewerSpace }).then((src) => {
-            session._hitTestSource = src;
-          }).catch(e => console.warn('requestHitTestSource failed', e));
-        }).catch(e => console.warn('requestReferenceSpace failed', e));
-      }
-      const hitTestSource = session && session._hitTestSource;
-      if (hitTestSource) {
-        const hitTestResults = frame.getHitTestResults(hitTestSource);
-        if (hitTestResults.length > 0) {
-          const hit = hitTestResults[0];
-          const pose = hit.getPose(referenceSpace);
-          tempMatrix.fromArray(pose.transform.matrix);
-          reticle.matrix.copy(tempMatrix);
-          reticle.visible = true;
-        } else {
-          reticle.visible = false;
-        }
-      }
+    // AR button & controllers
+    try {
+      document.body.appendChild(ARButton.createButton(renderer, { requiredFeatures: ['hit-test'] }));
+    } catch (e) {
+      showError('Erro ao criar botão AR: ' + e);
     }
 
-    renderer.render(scene, camera);
-  });
+    // armazenar mixers dos clones
+    const mixers = [];
+    const clock = new THREE.Clock();
 
-  window.addEventListener('resize', () => {
-    camera.aspect = window.innerWidth / window.innerHeight;
-    camera.updateProjectionMatrix();
-    renderer.setSize(window.innerWidth, window.innerHeight);
-  });
+    // ao tocar, clona com SkeletonUtils e cria mixer para a clone
+    const controller = renderer.xr.getController(0);
+    controller.addEventListener('select', () => {
+      if (!modelPrototype) {
+        console.warn('Modelo ainda não carregado');
+        return;
+      }
+      if (!reticle.visible) return;
 
-})();
-</script>
+      // clone que mantém skeleton/skin
+      const clone = SkeletonUtils.clone(modelPrototype);
+      clone.position.setFromMatrixPosition(reticle.matrix);
+      clone.quaternion.setFromRotationMatrix(reticle.matrix);
+      scene.add(clone);
+
+      // se gltf tiver animações, cria mixer para o clone e toca os clips
+      if (baseGLTF && baseGLTF.animations && baseGLTF.animations.length) {
+        const cloneMixer = new THREE.AnimationMixer(clone);
+        baseGLTF.animations.forEach(clip => {
+          const action = cloneMixer.clipAction(clip);
+          action.play();
+        });
+        mixers.push(cloneMixer);
+        console.log('Clone colocado e animação iniciada (mixers count = ' + mixers.length + ')');
+      }
+    });
+    scene.add(controller);
+
+    // loop render + hit-test
+    const tmpMat = new THREE.Matrix4();
+    renderer.setAnimationLoop((timestamp, frame) => {
+      const delta = clock.getDelta();
+      // atualizar todos mixers (originais e clones)
+      for (const m of mixers) m.update(delta);
+
+      if (frame) {
+        const session = renderer.xr.getSession();
+        const referenceSpace = renderer.xr.getReferenceSpace();
+        if (session && !session._hitTestSourceRequested) {
+          session._hitTestSourceRequested = true;
+          session.requestReferenceSpace('viewer').then((viewerSpace) => {
+            session.requestHitTestSource({ space: viewerSpace }).then((src) => {
+              session._hitTestSource = src;
+            }).catch(e => console.warn('requestHitTestSource failed', e));
+          }).catch(e => console.warn('requestReferenceSpace failed', e));
+        }
+        const hitTestSource = session && session._hitTestSource;
+        if (hitTestSource) {
+          const hitTestResults = frame.getHitTestResults(hitTestSource);
+          if (hitTestResults.length > 0) {
+            const hit = hitTestResults[0];
+            const pose = hit.getPose(referenceSpace);
+            tmpMat.fromArray(pose.transform.matrix);
+            reticle.matrix.copy(tmpMat);
+            reticle.visible = true;
+          } else {
+            reticle.visible = false;
+          }
+        }
+      }
+
+      renderer.render(scene, camera);
+    });
+
+    window.addEventListener('resize', () => {
+      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+
+  })();
+  </script>
 </body>
 </html>
