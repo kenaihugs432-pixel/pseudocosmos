@@ -80,7 +80,7 @@
     const camera = new THREE.PerspectiveCamera(70, window.innerWidth/window.innerHeight, 0.01, 20);
 
     // luzes
-    scene.add(new THREE.AmbientLight(0xffffff, 0.45));
+    scene.add(new THREE.AmbientLight(0xffffff, 0.7));
     scene.add(new THREE.HemisphereLight(0xffffff, 0x444444, 0.6));
     const dir = new THREE.DirectionalLight(0xffffff, 0.7); dir.position.set(1,2,1); scene.add(dir);
 
